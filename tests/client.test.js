@@ -21,6 +21,11 @@ function createReact() {
       if (!Object.hasOwn(hooks.cells, cell)) hooks.cells[cell] = initial
       return [hooks.cells[cell], (next) => { hooks.cells[cell] = next }]
     },
+    useRef(initial) {
+      const cell = hooks.index++
+      if (!Object.hasOwn(hooks.cells, cell)) hooks.cells[cell] = { current: initial }
+      return hooks.cells[cell]
+    },
     useEffect(effect) {
       const cell = hooks.index++
       if (!Object.hasOwn(hooks.cells, cell)) {
@@ -164,4 +169,26 @@ test('a tab coming back into view re-reads the pending set', async () => {
   } finally {
     delete globalThis.document
   }
+})
+
+
+test('a load started before Dismiss cannot bring the settled sessions back', async () => {
+  const listeners = {}
+  globalThis.document = {
+    visibilityState: 'visible', head: { append() {} }, createElement: () => ({}),
+    addEventListener: (name, fn) => { listeners[name] = fn }, removeEventListener: () => {},
+  }
+  try {
+    const { render } = await mount([ENTRY])
+    let release
+    globalThis.fetch = (url, init = {}) => init.method === 'POST'
+      ? Promise.resolve({ ok: true, json: async () => ({ pending: [] }) })
+      : new Promise((resolve) => { release = () => resolve({ ok: true, json: async () => ({ pending: [ENTRY] }) }) })
+    listeners.visibilitychange()
+    await all(render(), 'button').find((button) => text(button) === 'Dismiss').props.onClick()
+    assert.equal(render(), null)
+    release()
+    await settle()
+    assert.equal(render(), null, 'the old GET cannot restore an obsolete bar')
+  } finally { delete globalThis.document }
 })
