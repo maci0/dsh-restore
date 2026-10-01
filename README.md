@@ -1,36 +1,54 @@
 # dsh-resume-all
 
 A browser-style restore bar for DeepSeek Harness: after a reboot or crash, one
-click resumes the goals and continues every session that was mid-flight.
+click resumes the goals and continues every session that was mid-flight. After
+a restart the harness closes each cut-off turn and disarms every goal, then
+waits; nothing tells you which of dozens of sessions were working.
 
 ![restore bar](docs/restore-bar.png)
 
-## Why
+## What you get
 
-After a restart the harness closes each cut-off turn as `interrupted` and
-disarms every goal, then waits. Nothing tells you which of dozens of sessions
-were working, and the logs alone cannot: the `interrupted` closer is written
-whenever a session is next opened, so last night's crash looks the same as a
-session abandoned weeks ago.
+- A bar at the top of the app, shown once after a restart that cut sessions
+  off: "DeepSeek Harness stopped while N sessions were still working."
+- **Show** lists them by title, marked goal or turn; click one to open it.
+- **Restore** resumes every goal that is still `active` and sends `continue`
+  to every other session. **Dismiss** forgets the set.
+
+## Install
+
+> **Install it as a bundle.** `dsh plugin add …` mounts the row from the
+> package's own patch layer, which is what the settings editor can write to. A
+> row added with `--patch` is an overlay: it disappears at the next start.
+
+```sh
+dsh plugin --profile web add github:maci0/dsh-resume-all#v0.2.0
+```
+
+Pin a release tag: a bare `github:` spec floats on `main`. To upgrade, run the same command with the newer tag, then restart `dsh web` (bundle layers compose at boot).
+
+Needs the Web/desktop bundle (`webServer`, `sessionController`); headless
+profiles do not mount them.
 
 ## How it works
 
-While dsh runs, the host half keeps `$DSH_HOME/storages/dsh-resume-all.json`
-(default `~/.dsh/storages/`) listing every session with a turn in progress or
-a goal armed, rewritten atomically on each `turn/start`, `turn/end`, and goal
-activation change. A turn aborted as `disposed` (a shutdown) stays listed, so a
-clean reboot counts the same as a crash; a turn you stopped yourself does not.
+Two sources feed the pending set, which lives in
+`$DSH_HOME/storages/dsh-resume-all.json` (default `~/.dsh/storages/`):
 
-At the next start the listed sessions become pending. A boot scan adds every
-session a hard crash cut off, including crashes from before the plugin was
-installed: a log whose last turn no process closed (an open `turn/start`, or the
-`interrupted` closer the harness writes when such a session is reopened). It
-stats `$DSH_HOME/sessions` and opens only logs changed in the last 3 days, and
-remembers how far it has offered, so a dismissed crash stays dismissed.
+- **The live record.** While dsh runs, the plugin lists every session with a
+  turn in progress or a goal armed, rewritten atomically on each `turn/start`,
+  `turn/end`, and goal activation change. A turn aborted as `disposed` (a
+  shutdown) stays listed, so a clean reboot counts the same as a crash; a turn
+  you stopped yourself does not. At the next start the record becomes pending.
+- **The boot scan.** For hard crashes, including ones from before the plugin
+  was installed, it finds logs whose last turn no process closed: an open
+  `turn/start`, or the `interrupted` closer the harness writes when such a
+  session is reopened. It stats `$DSH_HOME/sessions` and opens only logs
+  changed in the last 3 days, and remembers how far it has offered, so a
+  dismissed crash stays dismissed. Titles and goal state come from the same
+  read.
 
-The bar then appears at the top of the app. **Show** lists the sessions by
-title, marked goal or turn (click one to open it). **Restore** opens each
-through the session controller and:
+**Restore** opens each pending session through the session controller and:
 
 - resumes its goal when the goal is still `active` (the goal round driver then
   queues the round, exactly like `/goal resume`);
@@ -40,16 +58,11 @@ through the session controller and:
 A session whose writer lock is held by another process, or that hit a gateway
 error, stays in the bar for another Restore. Deleted sessions and subagent
 children drop out; a parent's resume reaches its children. Paused, blocked, and
-completed goals are never touched. **Dismiss** forgets the whole set.
+completed goals are never touched. Two Restore clicks at once (two tabs) run
+one restore.
 
 The browser half talks to the host over `GET`/`POST /resume-all`, behind the
 web server's connection fence; a POST must carry a JSON body.
-
-## Install
-
-`dsh plugin add dsh-resume-all` (bundle install, like the other dsh plugins).
-Needs the Web/desktop bundle (`webServer`, `sessionController`); headless
-profiles do not mount them.
 
 ## Limits
 
@@ -60,3 +73,18 @@ profiles do not mount them.
   overwrite each other's record.
 - The bar reads the pending set once per page load; a second open tab does not
   see the other tab's Restore until reloaded.
+
+## Development
+
+```sh
+npm test   # node --test tests/*.test.js: unit suite plus a real Cordis composition mount
+```
+
+For local development, install the checkout into a profile with
+`dsh plugin --profile <name> add <path-to-checkout>`.
+
+Requires Node `^22.19.0 || >=24.0.0`.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
