@@ -23,6 +23,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createUserMessage } from '@deepseek-ai/dsh-llm/message'
 
 export const name = 'restore'
@@ -91,6 +92,30 @@ export function readPending(dir, warn = () => {}) {
   return { pending: record?.pending ?? {}, scannedThrough: record?.scannedThrough ?? 0 }
 }
 
+/** Serialize shared JSON edits across processes using SQLite's crash-safe writer lock. */
+function withPendingLock(dir, change) {
+  mkdirSync(dir, { recursive: true })
+  const lock = new DatabaseSync(join(dir, 'pending.lock.sqlite'))
+  try {
+    lock.exec('PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE')
+    const result = change()
+    lock.exec('COMMIT')
+    return result
+  } finally {
+    lock.close() // also rolls back and releases the lock if change throws
+  }
+}
+
+/** Read, change and publish the pending set under the same cross-process writer lock. */
+export function updatePending(dir, change, warn = () => {}) {
+  return withPendingLock(dir, () => {
+    const state = readPending(dir, warn)
+    change(state)
+    writeRecord(join(dir, 'pending.json'), state)
+    return state
+  })
+}
+
 /** This machine boot, so a record written before a reboot is known dead; undefined off Linux. */
 function currentBootId() {
   try {
@@ -149,22 +174,23 @@ export function ownerAlive(owner, here = { pid: process.pid, bootId: currentBoot
  * processes still running are left to them.
  */
 export function adoptDeadRecords(dir, warn = () => {}, here = undefined) {
-  const state = readPending(dir, warn)
-  let files = []
-  try {
-    files = readdirSync(dir)
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
-  }
-  for (const file of files) {
-    if (!/^live-\d+\.json$/u.test(file)) continue
-    const record = readRecord(join(dir, file), warn)
-    if (record !== undefined && ownerAlive(record, here)) continue
-    state.pending = { ...state.pending, ...(record?.live ?? {}) }
-    rmSync(join(dir, file), { force: true })
-  }
-  writeRecord(join(dir, 'pending.json'), state)
-  return state
+  return withPendingLock(dir, () => {
+    const state = readPending(dir, warn)
+    const adopted = []
+    for (const file of readdirSync(dir)) {
+      if (!/^live-\d+\.json$/u.test(file)) continue
+      const record = readRecord(join(dir, file), warn)
+      if (record !== undefined && ownerAlive(record, here)) continue
+      for (const [id, entry] of Object.entries(record?.live ?? {})) {
+        if ((entry.since ?? 0) >= (state.pending[id]?.since ?? 0)) state.pending[id] = entry
+      }
+      adopted.push(join(dir, file))
+    }
+    writeRecord(join(dir, 'pending.json'), state)
+    // Keep the only recovery record until its replacement has been published.
+    for (const path of adopted) rmSync(path, { force: true })
+    return state
+  })
 }
 
 /**
@@ -333,16 +359,7 @@ export function apply(ctx) {
   saveLive()
 
   /** Read the shared pending set fresh, apply `change`, write it back. */
-  const updatePending = (change) => {
-    const state = readPending(dir, warn)
-    change(state)
-    try {
-      writeRecord(join(dir, 'pending.json'), state)
-    } catch (error) {
-      warn(`dsh-restore: cannot write ${join(dir, 'pending.json')}: ${error.message}`)
-    }
-    return state
-  }
+  const changePending = (change) => updatePending(dir, change, warn)
 
   /**
    * Find sessions a hard crash cut off, including crashes from before this
@@ -374,7 +391,7 @@ export function apply(ctx) {
     }
     if (unreadable > 0) warn(`dsh-restore: skipped ${unreadable} session log(s) that could not be read`)
     const { entries, through } = crashedEntries(found, scannedThrough)
-    updatePending((state) => {
+    changePending((state) => {
       state.pending = { ...entries, ...state.pending }
       state.scannedThrough = Math.max(state.scannedThrough, through)
     })
@@ -409,7 +426,7 @@ export function apply(ctx) {
       if (result.settled) settled.push(id)
       results.push({ id, outcome: result.outcome })
     }
-    updatePending((state) => { for (const id of settled) delete state.pending[id] })
+    changePending((state) => { for (const id of settled) delete state.pending[id] })
     return results
   }
 
@@ -442,17 +459,22 @@ export function apply(ctx) {
       return
     }
     const body = await readJson(req)
-    if (body?.action === 'dismiss') {
-      updatePending((state) => { state.pending = {} })
-      sendJson(res, 200, { results: [], pending: [] })
-      return
-    }
-    if (body?.action === 'restore') {
-      // One restore at a time: a second tab's click joins the running one
-      // instead of sending every session a second `continue`.
-      restoring ??= restore().finally(() => { restoring = undefined })
-      const results = await restoring
-      sendJson(res, 200, { results, pending: pendingList() })
+    try {
+      if (body?.action === 'dismiss') {
+        changePending((state) => { state.pending = {} })
+        sendJson(res, 200, { results: [], pending: [] })
+        return
+      }
+      if (body?.action === 'restore') {
+        // One restore at a time: a second tab's click joins the running one
+        // instead of sending every session a second `continue`.
+        restoring ??= restore().finally(() => { restoring = undefined })
+        const results = await restoring
+        sendJson(res, 200, { results, pending: pendingList() })
+        return
+      }
+    } catch (error) {
+      sendJson(res, 500, { message: `cannot save recovery state: ${error.message}` })
       return
     }
     sendJson(res, 400, { message: 'action must be "restore" or "dismiss"' })

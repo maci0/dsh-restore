@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { ROUTE, adoptDeadRecords, apply, changedSessionIds, crashedEntries, endsCutOff, logFacts, ownerAlive, readPending, stateDir } from '../index.js'
+import { ROUTE, adoptDeadRecords, apply, changedSessionIds, crashedEntries, endsCutOff, logFacts, ownerAlive, readPending, stateDir, updatePending } from '../index.js'
 
 const HOME = join(import.meta.dirname, '..', '.scratch', 'home')
 process.env.DSH_HOME = HOME
@@ -129,8 +129,65 @@ test("boot adopts dead processes' records and leaves a running one's alone", () 
   assert.deepEqual(Object.keys(state.pending).sort(), ['a', 'b', 'exited', 'rebooted'])
   assert.equal(state.pending.a.since, 2, 'the newer live entry wins over an older pending one')
   assert.equal(state.scannedThrough, 5)
-  assert.deepEqual(readdirSync(DIR).sort(), ['live-200.json', 'pending.json'], 'a running process keeps its record')
+  assert.deepEqual(readdirSync(DIR).sort(), ['live-200.json', 'pending.json', 'pending.lock.sqlite'], 'a running process keeps its record')
   assert.deepEqual(pendingOnDisk(), state.pending)
+})
+
+test('adoption preserves live records when publication fails, and newer pending entries win', () => {
+  mkdirSync(DIR, { recursive: true })
+  const path = join(DIR, 'live-201.json')
+  writeFileSync(path, JSON.stringify({ version: 2, pid: 201, live: { s: { since: 1, turn: true } } }))
+  updatePending(DIR, (state) => { state.pending.s = { since: 2, goal: true } })
+  const tmp = join(DIR, `pending.json.${process.pid}.tmp`)
+  mkdirSync(tmp)
+  const here = { pid: 100, alive: () => false, startOf: () => undefined }
+  assert.throws(() => adoptDeadRecords(DIR, () => {}, here))
+  assert.equal(existsSync(path), true, 'the only live record must survive a failed write')
+  assert.deepEqual(readPending(DIR).pending.s, { since: 2, goal: true })
+  rmSync(tmp, { recursive: true })
+  assert.deepEqual(adoptDeadRecords(DIR, () => {}, here).pending.s, { since: 2, goal: true })
+  assert.equal(existsSync(path), false, 'only the successful publication retires the live record')
+})
+
+test('parallel processes retain every pending edit and a killed writer releases its lock', async () => {
+  const moduleUrl = new URL('../index.js', import.meta.url).href
+  const launch = (code) => spawn(process.execPath, ['--eval', code], { env: { ...process.env, RESTORE_TEST_DIR: DIR }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const completion = (child) => new Promise((resolve, reject) => {
+    let stderr = ''
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.once('error', reject)
+    child.once('exit', (code, signal) => code === 0 || signal === 'SIGKILL' ? resolve() : reject(new Error(stderr)))
+  })
+  await Promise.all(Array.from({ length: 6 }, (_, worker) => {
+    const child = launch(`import {updatePending} from ${JSON.stringify(moduleUrl)};
+      for (let n=0;n<10;n++) updatePending(process.env.RESTORE_TEST_DIR, state => {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,2);
+        state.pending[${JSON.stringify(worker)}+'-'+n]={since:n,turn:true};
+      });`)
+    return completion(child)
+  }))
+  assert.equal(Object.keys(readPending(DIR).pending).length, 60, 'no read-modify-write update may be lost')
+
+  const child = launch(`import {updatePending} from ${JSON.stringify(moduleUrl)};
+    updatePending(process.env.RESTORE_TEST_DIR, state => {
+      state.pending.unpublished={turn:true};
+      process.stdout.write('locked');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,30000);
+    });`)
+  const done = completion(child)
+  try {
+    await new Promise((resolve, reject) => {
+      child.stdout.once('data', resolve)
+      child.once('error', reject)
+      child.once('exit', () => reject(new Error('writer exited before taking the lock')))
+    })
+  } finally {
+    child.kill('SIGKILL')
+    await done
+  }
+  updatePending(DIR, state => { state.pending.afterCrash = { turn: true } })
+  assert.equal(readPending(DIR).pending.unpublished, undefined)
+  assert.equal(readPending(DIR).pending.afterCrash.turn, true)
 })
 
 test('the boot scan reads the store root from the loader row, and skips without one', async () => {
@@ -236,6 +293,19 @@ test('dismiss forgets the pending set', async () => {
   assert.deepEqual((await request('POST', { action: 'dismiss' })).body, { results: [], pending: [] })
   assert.deepEqual((await request('GET')).body, { pending: [] })
   assert.deepEqual(pendingOnDisk(), {})
+})
+
+test('restore and dismiss report a failed save and keep recovery entries on disk', async () => {
+  mount().emit(session('s'), 'turn/start')
+  const { request } = mount()
+  await request('GET') // finish the boot scan before refusing subsequent writes
+  mkdirSync(join(DIR, `pending.json.${process.pid}.tmp`))
+  for (const action of ['dismiss', 'restore']) {
+    const result = await request('POST', { action })
+    assert.equal(result.status, 500, action)
+    assert.match(result.body.message, /cannot save recovery state/)
+    assert.deepEqual(Object.keys(pendingOnDisk()), ['s'])
+  }
 })
 
 test('the route refuses what it should', async () => {

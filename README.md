@@ -22,7 +22,7 @@ waits; nothing tells you which of dozens of sessions were working.
 > row added with `--patch` is an overlay: it disappears at the next start.
 
 ```sh
-dsh plugin --profile web add github:maci0/dsh-restore#v0.8.0
+dsh plugin --profile web add github:maci0/dsh-restore#v0.8.1
 ```
 
 Pin a release tag: a bare `github:` spec floats on `main`. To upgrade, run the same command with the newer tag, then restart `dsh web` (bundle layers compose at boot).
@@ -34,7 +34,10 @@ profiles do not mount them.
 
 Two sources feed the pending set. State lives in
 `$DSH_HOME/storages/dsh-restore/` (default `~/.dsh/storages/`): a shared
-`pending.json`, and one `live-<pid>.json` per running harness process.
+`pending.json`, and one `live-<pid>.json` per running harness process. Shared
+edits hold the native SQLite writer lock in `pending.lock.sqlite`, which is
+released automatically if a process dies. A dead live record is retired only
+after its recovery entries have been saved; failed saves leave the bar intact.
 
 - **The live record.** While dsh runs, the plugin lists every session with a
   turn in progress or a goal armed, rewritten atomically on each `turn/start`,
