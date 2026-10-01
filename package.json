@@ -43,7 +43,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "test:node": "node --test tests/*.test.*"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
