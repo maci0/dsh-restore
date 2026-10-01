@@ -59,20 +59,20 @@ function compose() {
 
 test('the plugin mounts into a real Cordis context and releases its route', async () => {
   const { ctx, web } = compose()
-  const fiber = await ctx.plugin({ name: 'resume-all', inject, apply }, {})
+  const fiber = await ctx.plugin({ name: 'restore', inject, apply }, {})
   assert.deepEqual([...web.routes.keys()], [ROUTE])
 
   await fiber.dispose()
   assert.deepEqual([...web.routes.keys()], [], 'the route is released with the fiber')
 
-  const again = await ctx.plugin({ name: 'resume-all', inject, apply }, {})
+  const again = await ctx.plugin({ name: 'restore', inject, apply }, {})
   assert.deepEqual([...web.routes.keys()], [ROUTE], 'a remount registers cleanly')
   await again.dispose()
 })
 
 test('turn events reach the plugin through real dispatch, and stop after dispose', async () => {
   const { ctx } = compose()
-  const fiber = await ctx.plugin({ name: 'resume-all', inject, apply }, {})
+  const fiber = await ctx.plugin({ name: 'restore', inject, apply }, {})
   const live = () => JSON.parse(readFileSync(join(stateDir(), `live-${process.pid}.json`), 'utf8')).live
 
   ctx.emit('session/event', { id: 's1', header: { cwd: '/w' } }, { type: 'turn/start', data: {} })

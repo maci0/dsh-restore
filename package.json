@@ -1,5 +1,5 @@
 {
-  "name": "dsh-resume-all",
+  "name": "dsh-restore",
   "version": "0.6.0",
   "private": true,
   "type": "module",
@@ -50,7 +50,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/maci0/dsh-resume-all.git"
+    "url": "https://github.com/maci0/dsh-restore.git"
   },
   "icon": "./icon.svg",
   "dependencies": {

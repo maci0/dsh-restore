@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "dsh-resume-all",
+      "name": "dsh-restore",
       "dependencies": {
         "@deepseek-ai/dsh-llm": "~0.2.0-rc.2",
       },

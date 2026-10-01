@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Resume All",
-    "description": "Resume every session that was mid-flight at the last shutdown with /resume-all."
+    "title": "Restore",
+    "description": "After a reboot or crash, a bar offers to restore every session that was mid-flight: active goals resume, interrupted turns continue."
   }
 }

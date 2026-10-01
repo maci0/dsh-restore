@@ -1,5 +1,5 @@
 /**
- * dsh-resume-all: offer to resume every session that was mid-flight when the
+ * dsh-restore: offer to resume every session that was mid-flight when the
  * harness last went down (reboot, crash, kill), the way a browser offers to
  * restore its tabs.
  *
@@ -13,7 +13,7 @@
  * Restore resumes a session's goal when it is still `active` (the harness
  * disarms every goal on restart) and sends `continue` to any other session.
  *
- * Route `/resume-all`:
+ * Route `/restore`:
  *   GET                             → { pending: [{ id, cwd, since, turn, goal }] }
  *   POST { "action": "restore" }    → { results: [{ id, outcome }], pending }
  *   POST { "action": "dismiss" }    → { results: [], pending: [] }
@@ -25,11 +25,11 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm/message'
 
-export const name = 'resume-all'
+export const name = 'restore'
 export const inject = ['webServer', 'sessionController', 'goals', 'sessions', 'sessionPersistence']
 
 /** The route the browser half reads and posts to. */
-export const ROUTE = '/resume-all'
+export const ROUTE = '/restore'
 const CONTINUE_MESSAGE = 'continue'
 const STATE_VERSION = 2
 /** Cut-off turns older than this are history, not a crash to recover from. */
@@ -43,12 +43,12 @@ function dshHome(env = process.env) {
 }
 
 /**
- * `$DSH_HOME/storages/dsh-resume-all/`: `pending.json`, shared by every
+ * `$DSH_HOME/storages/dsh-restore/`: `pending.json`, shared by every
  * harness process on this home, and one `live-<pid>.json` per process, which
  * only that process writes, so two processes never overwrite each other.
  */
 export function stateDir(env = process.env) {
-  return join(dshHome(env), 'storages', 'dsh-resume-all')
+  return join(dshHome(env), 'storages', 'dsh-restore')
 }
 
 /**
@@ -68,7 +68,7 @@ function readRecord(path, warn) {
     if (parsed?.version !== STATE_VERSION) throw new Error(`unsupported version ${parsed?.version}`)
     return parsed
   } catch (error) {
-    warn(`dsh-resume-all: ignoring unreadable ${path}: ${error.message}`)
+    warn(`dsh-restore: ignoring unreadable ${path}: ${error.message}`)
     return undefined
   }
 }
@@ -263,12 +263,12 @@ async function resumeOne(ctx, id) {
       return { settled: true, outcome: 'goal resumed' }
     } catch (error) {
       // Round budget spent, or already armed: fall through to a plain continue.
-      ctx.logger.warn(`dsh-resume-all: goal resume failed for ${id}: ${error.message}`)
+      ctx.logger.warn(`dsh-restore: goal resume failed for ${id}: ${error.message}`)
     }
   }
   agent.followup(createUserMessage({
     content: [{ type: 'text', text: CONTINUE_MESSAGE }],
-    source: { kind: 'resume-all', form: 'relay' },
+    source: { kind: 'restore', form: 'relay' },
   }))
   return { settled: true, outcome: 'continued' }
 }
@@ -307,7 +307,7 @@ export function apply(ctx) {
     try {
       writeRecord(livePath, { pid: process.pid, ...(bootId === undefined ? {} : { bootId }), live })
     } catch (error) {
-      warn(`dsh-resume-all: cannot write ${livePath}: ${error.message}`)
+      warn(`dsh-restore: cannot write ${livePath}: ${error.message}`)
     }
   }
   saveLive()
@@ -319,7 +319,7 @@ export function apply(ctx) {
     try {
       writeRecord(join(dir, 'pending.json'), state)
     } catch (error) {
-      warn(`dsh-resume-all: cannot write ${join(dir, 'pending.json')}: ${error.message}`)
+      warn(`dsh-restore: cannot write ${join(dir, 'pending.json')}: ${error.message}`)
     }
     return state
   }
@@ -334,7 +334,7 @@ export function apply(ctx) {
     let unreadable = 0
     const root = jsonlRoot(ctx)
     if (root === undefined) {
-      warn('dsh-resume-all: no session-persistence-jsonl row, so no boot scan; only the live record is offered')
+      warn('dsh-restore: no session-persistence-jsonl row, so no boot scan; only the live record is offered')
       return
     }
     const { scannedThrough } = readPending(dir, warn)
@@ -352,14 +352,14 @@ export function apply(ctx) {
         unreadable += 1
       }
     }
-    if (unreadable > 0) warn(`dsh-resume-all: skipped ${unreadable} session log(s) that could not be read`)
+    if (unreadable > 0) warn(`dsh-restore: skipped ${unreadable} session log(s) that could not be read`)
     const { entries, through } = crashedEntries(found, scannedThrough)
     updatePending((state) => {
       state.pending = { ...entries, ...state.pending }
       state.scannedThrough = Math.max(state.scannedThrough, through)
     })
   }
-  const scanned = scanLogs().catch((error) => warn(`dsh-resume-all: log scan failed: ${error.message}`))
+  const scanned = scanLogs().catch((error) => warn(`dsh-restore: log scan failed: ${error.message}`))
 
   /** Set one flag on a session's live entry; drop the entry once nothing is in flight. */
   const mark = (session, flag, on) => {
@@ -438,7 +438,7 @@ export function apply(ctx) {
     sendJson(res, 400, { message: 'action must be "restore" or "dismiss"' })
   }
 
-  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: ROUTE, handler }), `resume-all: ${ROUTE}`)
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: ROUTE, handler }), `restore: ${ROUTE}`)
 
   ctx.effect(() => {
     const offEvent = ctx.on('session/event', (session, event) => {

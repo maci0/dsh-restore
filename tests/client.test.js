@@ -103,10 +103,10 @@ const ENTRY = { id: 's1', cwd: '/work/demo', since: 0, turn: true, goal: false }
 
 test('registers one app-level overlay entry', async () => {
   const { registration, slots } = await loadClient()
-  assert.equal(registration.id, 'dsh-resume-all')
+  assert.equal(registration.id, 'dsh-restore')
   assert.equal(slots.length, 1)
   assert.equal(slots[0].options.name, 'shell.overlay')
-  assert.equal(slots[0].options.id, 'resume-all')
+  assert.equal(slots[0].options.id, 'restore')
 })
 
 test('renders nothing when nothing is pending', async () => {

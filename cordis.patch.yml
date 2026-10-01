@@ -2,5 +2,5 @@
 # (dsh plugin add does that from dsh.bundle). Do not also paste this row into
 # the profile's cordis.patch.yml: insert does not dedupe ids.
 - insert:
-    - id: resume-all
-      name: 'dsh-resume-all'
+    - id: restore
+      name: 'dsh-restore'
