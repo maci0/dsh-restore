@@ -21,9 +21,16 @@ a goal armed, rewritten atomically on each `turn/start`, `turn/end`, and goal
 activation change. A turn aborted as `disposed` (a shutdown) stays listed, so a
 clean reboot counts the same as a crash; a turn you stopped yourself does not.
 
-At the next start the listed sessions become pending and the bar appears at
-the top of the app. **Show** lists them (click one to open it). **Restore**
-opens each through the session controller and:
+At the next start the listed sessions become pending. A boot scan adds every
+session a hard crash cut off, including crashes from before the plugin was
+installed: a log whose last turn no process closed (an open `turn/start`, or the
+`interrupted` closer the harness writes when such a session is reopened). It
+stats `$DSH_HOME/sessions` and opens only logs changed in the last 3 days, and
+remembers how far it has offered, so a dismissed crash stays dismissed.
+
+The bar then appears at the top of the app. **Show** lists the sessions by
+title, marked goal or turn (click one to open it). **Restore** opens each
+through the session controller and:
 
 - resumes its goal when the goal is still `active` (the goal round driver then
   queues the round, exactly like `/goal resume`);
@@ -46,8 +53,9 @@ profiles do not mount them.
 
 ## Limits
 
-- Only sessions in flight while this plugin was loaded are known. Crashes from
-  before the install are not.
+- The boot scan reads only the default store root, `$DSH_HOME/sessions`. A
+  profile that moves `session-persistence-jsonl.root` gets the live record only.
+- Crashes older than 3 days are treated as history and not offered.
 - One state file per `$DSH_HOME`: two harness processes on the same home
   overwrite each other's record.
 - The bar reads the pending set once per page load; a second open tab does not
