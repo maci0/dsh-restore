@@ -77,13 +77,13 @@ web server's connection fence; a POST must carry a JSON body.
 ## Development
 
 ```sh
-npm test   # node --test tests/*.test.js: unit suite plus a real Cordis composition mount
+bun test   # unit suite, the restore bar, and a real Cordis composition mount
 ```
 
 For local development, install the checkout into a profile with
 `dsh plugin --profile <name> add <path-to-checkout>`.
 
-Requires Node `^22.19.0 || >=24.0.0`.
+dsh loads plugins on Node `^22.19.0 || >=24.0.0`; development and tests run on bun.
 
 ## Licence
 
