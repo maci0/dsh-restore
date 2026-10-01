@@ -1,4 +1,4 @@
-# dsh-resume-all
+# dsh-restore
 
 A browser-style restore bar for DeepSeek Harness: after a reboot or crash, one
 click resumes the goals and continues every session that was mid-flight. After
@@ -22,7 +22,7 @@ waits; nothing tells you which of dozens of sessions were working.
 > row added with `--patch` is an overlay: it disappears at the next start.
 
 ```sh
-dsh plugin --profile web add github:maci0/dsh-resume-all#v0.6.0
+dsh plugin --profile web add github:maci0/dsh-restore#v0.6.0
 ```
 
 Pin a release tag: a bare `github:` spec floats on `main`. To upgrade, run the same command with the newer tag, then restart `dsh web` (bundle layers compose at boot).
@@ -33,7 +33,7 @@ profiles do not mount them.
 ## How it works
 
 Two sources feed the pending set. State lives in
-`$DSH_HOME/storages/dsh-resume-all/` (default `~/.dsh/storages/`): a shared
+`$DSH_HOME/storages/dsh-restore/` (default `~/.dsh/storages/`): a shared
 `pending.json`, and one `live-<pid>.json` per running harness process.
 
 - **The live record.** While dsh runs, the plugin lists every session with a
@@ -66,7 +66,7 @@ children drop out; a parent's resume reaches its children. Paused, blocked, and
 completed goals are never touched. Two Restore clicks at once (two tabs) run
 one restore.
 
-The browser half talks to the host over `GET`/`POST /resume-all`, behind the
+The browser half talks to the host over `GET`/`POST /restore`, behind the
 web server's connection fence; a POST must carry a JSON body. The bar
 re-reads the set when its tab comes back into view, so a Restore or Dismiss
 in another tab is reflected.
