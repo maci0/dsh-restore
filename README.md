@@ -62,7 +62,9 @@ completed goals are never touched. Two Restore clicks at once (two tabs) run
 one restore.
 
 The browser half talks to the host over `GET`/`POST /resume-all`, behind the
-web server's connection fence; a POST must carry a JSON body.
+web server's connection fence; a POST must carry a JSON body. The bar
+re-reads the set when its tab comes back into view, so a Restore or Dismiss
+in another tab is reflected.
 
 ## Limits
 
@@ -71,8 +73,6 @@ web server's connection fence; a POST must carry a JSON body.
 - Crashes older than 3 days are treated as history and not offered.
 - One state file per `$DSH_HOME`: two harness processes on the same home
   overwrite each other's record.
-- The bar reads the pending set once per page load; a second open tab does not
-  see the other tab's Restore until reloaded.
 
 ## Development
 
