@@ -1,6 +1,7 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { ROUTE, adoptDeadRecords, apply, changedSessionIds, crashedEntries, endsCutOff, logFacts, ownerAlive, readPending, stateDir } from '../index.js'
 
@@ -109,7 +110,7 @@ const session = (id, header = { cwd: `/work/${id}` }) => ({ id, header })
 const fakeAgent = (id, status = 'idle') => ({ id, status, sent: [], followup(m) { this.sent.push(m) } })
 
 test('ownerAlive: never this pid or another boot, else the pid decides', () => {
-  const here = { pid: 100, bootId: 'boot-b', alive: (pid) => pid === 200 }
+  const here = { pid: 100, bootId: 'boot-b', alive: (pid) => pid === 200, startOf: () => undefined }
   assert.equal(ownerAlive({ pid: 100, bootId: 'boot-b' }, here), false, 'a record with our own pid is a predecessor')
   assert.equal(ownerAlive({ pid: 200, bootId: 'boot-a' }, here), false, 'written before a reboot')
   assert.equal(ownerAlive({ pid: 200, bootId: 'boot-b' }, here), true, 'still running')
@@ -124,7 +125,7 @@ test("boot adopts dead processes' records and leaves a running one's alone", () 
   record(200, 'boot-b', { running: { turn: true } })
   record(201, 'boot-a', { a: { turn: true, since: 2 }, rebooted: { turn: true } })
   record(202, 'boot-b', { exited: { goal: true } })
-  const state = adoptDeadRecords(DIR, () => {}, { pid: 100, bootId: 'boot-b', alive: (pid) => pid === 200 })
+  const state = adoptDeadRecords(DIR, () => {}, { pid: 100, bootId: 'boot-b', alive: (pid) => pid === 200, startOf: () => undefined })
   assert.deepEqual(Object.keys(state.pending).sort(), ['a', 'b', 'exited', 'rebooted'])
   assert.equal(state.pending.a.since, 2, 'the newer live entry wins over an older pending one')
   assert.equal(state.scannedThrough, 5)
@@ -345,4 +346,28 @@ test('two restores at once resume each session once', async () => {
   const [a, b] = await Promise.all([request('POST', { action: 'restore' }), request('POST', { action: 'restore' })])
   assert.equal(agent.sent.length, 1, 'a second tab clicking Restore must not send continue twice')
   assert.deepEqual(a.body, b.body, 'both callers get the one outcome')
+})
+
+test('ownerAlive: a pid reused within the same boot is told apart by its start time', () => {
+  const here = { pid: 100, bootId: 'boot-b', alive: () => true, startOf: (pid) => (pid === 200 ? '5000' : undefined) }
+  assert.equal(ownerAlive({ pid: 200, bootId: 'boot-b', start: '5000' }, here), true, 'the writer itself')
+  assert.equal(ownerAlive({ pid: 200, bootId: 'boot-b', start: '4000' }, here), false, 'another process now holds the pid')
+  assert.equal(ownerAlive({ pid: 200, bootId: 'boot-b' }, here), true, 'a record without a start time falls back to the pid')
+})
+
+test('ownerAlive reads real start times from procfs', { skip: !existsSync('/proc/self/stat') }, async () => {
+  const child = spawn('sleep', ['30'])
+  try {
+    await new Promise((resolve) => child.once('spawn', resolve))
+    // Field 22, counted independently: fields 3.. follow the last ')'.
+    const stat = readFileSync(`/proc/${String(child.pid)}/stat`, 'utf8')
+    const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[22 - 3]
+    const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+    assert.equal(ownerAlive({ pid: child.pid, bootId, start }), true, 'the running writer')
+    assert.equal(ownerAlive({ pid: child.pid, bootId, start: `${start}1` }), false, 'same pid, another process')
+  } finally {
+    child.kill()
+    await new Promise((resolve) => child.once('exit', resolve))
+  }
+  assert.equal(ownerAlive({ pid: child.pid }), false, 'gone once it exits')
 })
