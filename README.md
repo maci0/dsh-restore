@@ -32,18 +32,23 @@ profiles do not mount them.
 
 ## How it works
 
-Two sources feed the pending set, which lives in
-`$DSH_HOME/storages/dsh-resume-all.json` (default `~/.dsh/storages/`):
+Two sources feed the pending set. State lives in
+`$DSH_HOME/storages/dsh-resume-all/` (default `~/.dsh/storages/`): a shared
+`pending.json`, and one `live-<pid>.json` per running harness process.
 
 - **The live record.** While dsh runs, the plugin lists every session with a
   turn in progress or a goal armed, rewritten atomically on each `turn/start`,
   `turn/end`, and goal activation change. A turn aborted as `disposed` (a
   shutdown) stays listed, so a clean reboot counts the same as a crash; a turn
-  you stopped yourself does not. At the next start the record becomes pending.
+  you stopped yourself does not. Each process writes only its own record, so
+  two harness processes on one home never overwrite each other. At the next
+  start, records whose process is gone (another boot id, or a pid no longer
+  running) move to pending; a running process keeps its own.
 - **The boot scan.** For hard crashes, including ones from before the plugin
   was installed, it finds logs whose last turn no process closed: an open
   `turn/start`, or the `interrupted` closer the harness writes when such a
-  session is reopened. It stats `$DSH_HOME/sessions` and opens only logs
+  session is reopened. It stats the JSONL store (the `root` of the
+  `session-persistence-jsonl` row, so a moved store is found) and opens only logs
   changed in the last 3 days, and remembers how far it has offered, so a
   dismissed crash stays dismissed. Titles and goal state come from the same
   read.
@@ -68,11 +73,11 @@ in another tab is reflected.
 
 ## Limits
 
-- The boot scan reads only the default store root, `$DSH_HOME/sessions`. A
-  profile that moves `session-persistence-jsonl.root` gets the live record only.
+- A profile that persists sessions without the JSONL store gets no boot scan,
+  only the live record, and the plugin logs that.
 - Crashes older than 3 days are treated as history and not offered.
-- One state file per `$DSH_HOME`: two harness processes on the same home
-  overwrite each other's record.
+- A pid reused within the same boot reads as a running owner, so that
+  record is offered once the new holder of the pid exits.
 
 ## Development
 

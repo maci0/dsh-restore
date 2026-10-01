@@ -15,7 +15,7 @@ import test from 'node:test'
 
 import { Context, Service } from '@deepseek-ai/cordis'
 
-import { ROUTE, apply, inject, statePath } from '../index.js'
+import { ROUTE, apply, inject, stateDir } from '../index.js'
 
 const HOME = join(import.meta.dirname, '..', '.scratch', 'composition')
 process.env.DSH_HOME = HOME
@@ -73,7 +73,7 @@ test('the plugin mounts into a real Cordis context and releases its route', asyn
 test('turn events reach the plugin through real dispatch, and stop after dispose', async () => {
   const { ctx } = compose()
   const fiber = await ctx.plugin({ name: 'resume-all', inject, apply }, {})
-  const live = () => JSON.parse(readFileSync(statePath(), 'utf8')).live
+  const live = () => JSON.parse(readFileSync(join(stateDir(), `live-${process.pid}.json`), 'utf8')).live
 
   ctx.emit('session/event', { id: 's1', header: { cwd: '/w' } }, { type: 'turn/start', data: {} })
   assert.equal(live().s1.turn, true)
