@@ -307,6 +307,7 @@ export function apply(ctx) {
     return results
   }
 
+  let restoring
   const pendingList = () => Object.entries(state.pending).map(([id, entry]) => ({ id, ...entry }))
 
   const handler = async (req, res) => {
@@ -342,7 +343,10 @@ export function apply(ctx) {
       return
     }
     if (body?.action === 'restore') {
-      const results = await restore()
+      // One restore at a time: a second tab's click joins the running one
+      // instead of sending every session a second `continue`.
+      restoring ??= restore().finally(() => { restoring = undefined })
+      const results = await restoring
       sendJson(res, 200, { results, pending: pendingList() })
       return
     }
