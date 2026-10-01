@@ -42,8 +42,9 @@ Two sources feed the pending set. State lives in
   shutdown) stays listed, so a clean reboot counts the same as a crash; a turn
   you stopped yourself does not. Each process writes only its own record, so
   two harness processes on one home never overwrite each other. At the next
-  start, records whose process is gone (another boot id, or a pid no longer
-  running) move to pending; a running process keeps its own.
+  start, records whose process is gone (another boot id, a pid no longer
+  running, or a pid whose process started at another time) move to pending; a
+  running process keeps its own.
 - **The boot scan.** For hard crashes, including ones from before the plugin
   was installed, it finds logs whose last turn no process closed: an open
   `turn/start`, or the `interrupted` closer the harness writes when such a
@@ -76,8 +77,9 @@ in another tab is reflected.
 - A profile that persists sessions without the JSONL store gets no boot scan,
   only the live record, and the plugin logs that.
 - Crashes older than 3 days are treated as history and not offered.
-- A pid reused within the same boot reads as a running owner, so that
-  record is offered once the new holder of the pid exits.
+- Off Linux (no procfs start times or boot id), a pid reused by another
+  process reads as a running owner, so that record is offered once the pid's
+  new holder exits.
 
 ## Development
 

@@ -111,16 +111,35 @@ function pidAlive(pid) {
 }
 
 /**
- * Whether the process that wrote a live record is still running: never when it
- * carries this process's own pid or another boot's id, else when its pid
- * exists. A pid reused within the same boot reads as alive, so that record is
- * offered once its new holder exits.
- * @param {{ pid: number, bootId?: string }} owner - the record's writer.
- * @param here - this process's identity and liveness probe.
+ * A process's start time in clock ticks since boot (field 22 of
+ * `/proc/<pid>/stat`), which tells a reused pid from the process that first
+ * held it; undefined off Linux or when the process is gone. The fields are read
+ * after the last `)`, since the command name in parentheses may hold spaces.
  */
-export function ownerAlive(owner, here = { pid: process.pid, bootId: currentBootId(), alive: pidAlive }) {
+function processStart(pid) {
+  try {
+    const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8')
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether the process that wrote a live record is still running: never when it
+ * carries this process's own pid or another boot's id; else, where procfs
+ * gives start times, only when the pid's process started when the writer did
+ * (a reused pid is another process); otherwise when the pid exists.
+ * @param {{ pid: number, bootId?: string, start?: string }} owner - the record's writer.
+ * @param here - this process's identity and liveness probes.
+ */
+export function ownerAlive(owner, here = { pid: process.pid, bootId: currentBootId(), alive: pidAlive, startOf: processStart }) {
   if (owner.pid === here.pid) return false
   if (owner.bootId !== undefined && here.bootId !== undefined && owner.bootId !== here.bootId) return false
+  if (owner.start !== undefined) {
+    const start = here.startOf(owner.pid)
+    if (start !== undefined) return start === owner.start
+  }
   return here.alive(owner.pid)
 }
 
@@ -303,9 +322,10 @@ export function apply(ctx) {
   const livePath = join(dir, `live-${process.pid}.json`)
   const live = {}
   const bootId = currentBootId()
+  const start = processStart(process.pid)
   const saveLive = () => {
     try {
-      writeRecord(livePath, { pid: process.pid, ...(bootId === undefined ? {} : { bootId }), live })
+      writeRecord(livePath, { pid: process.pid, ...(bootId === undefined ? {} : { bootId }), ...(start === undefined ? {} : { start }), live })
     } catch (error) {
       warn(`dsh-restore: cannot write ${livePath}: ${error.message}`)
     }
