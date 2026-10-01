@@ -1,0 +1,6 @@
+# Bundle layer: applied when a profile lists this bundle in dsh.profile.bundles
+# (dsh plugin add does that from dsh.bundle). Do not also paste this row into
+# the profile's cordis.patch.yml: insert does not dedupe ids.
+- insert:
+    - id: resume-all
+      name: 'dsh-resume-all'

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Resume All",
+    "description": "Resume every session that was mid-flight at the last shutdown with /resume-all."
+  }
+}

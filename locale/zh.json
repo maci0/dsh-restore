@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "全部恢复",
+    "description": "用 /resume-all 恢复上次关闭时仍在进行中的所有会话。"
+  }
+}

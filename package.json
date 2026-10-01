@@ -1,0 +1,59 @@
+{
+  "name": "dsh-resume-all",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Browser-style restore bar for DeepSeek Harness: after a reboot or crash, resume goals and continue every session that was mid-flight.",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-api-session-controller"
+      ]
+    },
+    "compatibility": {
+      "dsh": ">=0.2.0-rc.2 <0.3.0"
+    }
+  },
+  "files": [
+    "icon.svg",
+    "locale/*.json",
+    "index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "docs/restore-bar.png",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test index.test.js"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maci0/dsh-resume-all.git"
+  },
+  "icon": "./icon.svg",
+  "dependencies": {
+    "@deepseek-ai/dsh-llm": "~0.2.0-rc.2"
+  }
+}
