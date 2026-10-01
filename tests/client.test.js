@@ -142,3 +142,26 @@ test('Dismiss clears the bar', async () => {
   await all(render(), 'button').find((b) => text(b) === 'Dismiss').props.onClick()
   assert.equal(render(), null)
 })
+
+test('a tab coming back into view re-reads the pending set', async () => {
+  // Another tab restored everything while this one sat in the background.
+  const listeners = {}
+  globalThis.document = {
+    visibilityState: 'visible',
+    head: { append() {} },
+    createElement: () => ({}),
+    addEventListener: (type, fn) => { listeners[type] = fn },
+    removeEventListener: (type) => { delete listeners[type] },
+  }
+  try {
+    const { render } = await mount([ENTRY])
+    assert.match(text(render()), /1 session was still working/)
+    stubFetch([])
+    assert.equal(typeof listeners.visibilitychange, 'function', 'the bar listens for the tab coming back')
+    listeners.visibilitychange()
+    await settle()
+    assert.equal(render(), null)
+  } finally {
+    delete globalThis.document
+  }
+})
