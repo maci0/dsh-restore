@@ -2,9 +2,9 @@ import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, rmSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
-import { ROUTE, apply, changedSessionIds, crashedEntries, endsCutOff, logFacts, promoteLive, readState, sessionsRoot, statePath } from './index.js'
+import { ROUTE, apply, changedSessionIds, crashedEntries, endsCutOff, logFacts, promoteLive, readState, sessionsRoot, statePath } from '../index.js'
 
-const HOME = join(import.meta.dirname, '.scratch', 'home')
+const HOME = join(import.meta.dirname, '..', '.scratch', 'home')
 process.env.DSH_HOME = HOME
 const FILE = statePath()
 
@@ -293,4 +293,13 @@ test('logFacts takes the latest title and goal state', () => {
   assert.equal(logFacts([goal('create', 'active'), goal('pause', 'paused')]).goal, false)
   assert.equal(logFacts([goal('create', 'active'), goal('clear')]).goal, false)
   assert.equal(logFacts([goal('pause', 'paused'), goal('resume', 'active')]).goal, true)
+})
+
+test('two restores at once resume each session once', async () => {
+  mount().emit(session('s'), 'turn/start')
+  const agent = fakeAgent('s')
+  const { request } = mount({ agents: { s: agent } })
+  const [a, b] = await Promise.all([request('POST', { action: 'restore' }), request('POST', { action: 'restore' })])
+  assert.equal(agent.sent.length, 1, 'a second tab clicking Restore must not send continue twice')
+  assert.deepEqual(a.body, b.body, 'both callers get the one outcome')
 })
