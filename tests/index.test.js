@@ -1,27 +1,30 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, rmSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
-import { ROUTE, apply, changedSessionIds, crashedEntries, endsCutOff, logFacts, promoteLive, readState, sessionsRoot, statePath } from '../index.js'
+import { ROUTE, adoptDeadRecords, apply, changedSessionIds, crashedEntries, endsCutOff, logFacts, ownerAlive, readPending, stateDir } from '../index.js'
 
 const HOME = join(import.meta.dirname, '..', '.scratch', 'home')
 process.env.DSH_HOME = HOME
-const FILE = statePath()
+const DIR = stateDir()
+const SESSIONS = join(HOME, 'sessions')
 
 beforeEach(() => {
   rmSync(HOME, { recursive: true, force: true })
   mkdirSync(HOME, { recursive: true })
 })
 
-const onDisk = () => JSON.parse(readFileSync(FILE, 'utf8'))
+/** This process's live record and the shared pending set, as written. */
+const liveOnDisk = () => JSON.parse(readFileSync(join(DIR, `live-${process.pid}.json`), 'utf8')).live
+const pendingOnDisk = () => readPending(DIR).pending
 
 /**
  * Lay each log out as the JSONL store does, `sessions/<project>/<id>/`, with
  * the file mtime at `log.mtime` (default now): the boot scan stats these.
  */
-function storeLogs(logs) {
+function storeLogs(logs, root = SESSIONS) {
   for (const [id, log] of Object.entries(logs)) {
-    const dir = join(HOME, 'sessions', '--work--', id)
+    const dir = join(root, '--work--', id)
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'session.v4.jsonl.zstd')
     writeFileSync(file, '')
@@ -34,7 +37,7 @@ function storeLogs(logs) {
  * Mount the plugin against fakes. `agents` maps session id to a fake agent or
  * to an `{ error }` resolution; `goals` maps session id to a goal view.
  */
-function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {} } = {}) {
+function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {}, sessionsRoot = SESSIONS } = {}) {
   storeLogs(logs)
   const listeners = {}
   const routes = []
@@ -43,7 +46,14 @@ function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {} } = {
   const opened = []
   const ctx = {
     logger: { warn: (text) => warnings.push(text) },
-    get: (name) => (name === 'connection' ? { requestRejection: () => rejection } : undefined),
+    get: (name) => {
+      if (name === 'connection') return { requestRejection: () => rejection }
+      // The loader row the boot scan reads its store root from; `null` drops it.
+      if (name === 'loader' && sessionsRoot !== null) {
+        return { entries: () => [{ options: { id: 'session-persistence-jsonl' }, fiber: { config: { root: sessionsRoot } } }] }
+      }
+      return undefined
+    },
     sessions: { get: (id) => ({ id, header: { cwd: `/work/${id}` } }) },
     sessionController: {
       resolveAgent: async (id) => {
@@ -98,40 +108,73 @@ function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {} } = {
 const session = (id, header = { cwd: `/work/${id}` }) => ({ id, header })
 const fakeAgent = (id, status = 'idle') => ({ id, status, sent: [], followup(m) { this.sent.push(m) } })
 
-test('promoteLive keeps old pending and lets newer live entries win', () => {
-  const state = { live: { a: { turn: true, since: 2 } }, pending: { a: { turn: true, since: 1 }, b: { goal: true } } }
-  assert.deepEqual(promoteLive(state), { live: {}, pending: { a: { turn: true, since: 2 }, b: { goal: true } } })
+test('ownerAlive: never this pid or another boot, else the pid decides', () => {
+  const here = { pid: 100, bootId: 'boot-b', alive: (pid) => pid === 200 }
+  assert.equal(ownerAlive({ pid: 100, bootId: 'boot-b' }, here), false, 'a record with our own pid is a predecessor')
+  assert.equal(ownerAlive({ pid: 200, bootId: 'boot-a' }, here), false, 'written before a reboot')
+  assert.equal(ownerAlive({ pid: 200, bootId: 'boot-b' }, here), true, 'still running')
+  assert.equal(ownerAlive({ pid: 300, bootId: 'boot-b' }, here), false, 'exited')
+  assert.equal(ownerAlive({ pid: 200 }, { ...here, bootId: undefined }), true, 'no boot id off Linux: the pid alone decides')
+})
+
+test("boot adopts dead processes' records and leaves a running one's alone", () => {
+  mkdirSync(DIR, { recursive: true })
+  const record = (pid, bootId, live) => writeFileSync(join(DIR, `live-${pid}.json`), JSON.stringify({ version: 2, pid, bootId, live }))
+  writeFileSync(join(DIR, 'pending.json'), JSON.stringify({ version: 2, pending: { a: { turn: true, since: 1 }, b: { goal: true } }, scannedThrough: 5 }))
+  record(200, 'boot-b', { running: { turn: true } })
+  record(201, 'boot-a', { a: { turn: true, since: 2 }, rebooted: { turn: true } })
+  record(202, 'boot-b', { exited: { goal: true } })
+  const state = adoptDeadRecords(DIR, () => {}, { pid: 100, bootId: 'boot-b', alive: (pid) => pid === 200 })
+  assert.deepEqual(Object.keys(state.pending).sort(), ['a', 'b', 'exited', 'rebooted'])
+  assert.equal(state.pending.a.since, 2, 'the newer live entry wins over an older pending one')
+  assert.equal(state.scannedThrough, 5)
+  assert.deepEqual(readdirSync(DIR).sort(), ['live-200.json', 'pending.json'], 'a running process keeps its record')
+  assert.deepEqual(pendingOnDisk(), state.pending)
+})
+
+test('the boot scan reads the store root from the loader row, and skips without one', async () => {
+  const moved = join(HOME, 'elsewhere')
+  const now = Date.now()
+  const logs = { crashed: { events: [{ type: 'turn/start', time: now - 60_000 }] } }
+  storeLogs(logs, moved)
+  const found = mount({ logs, sessionsRoot: moved })
+  assert.deepEqual((await found.request('GET')).body.pending.map((p) => p.id), ['crashed'])
+
+  rmSync(DIR, { recursive: true, force: true })
+  const none = mount({ logs, sessionsRoot: null })
+  assert.deepEqual((await none.request('GET')).body.pending, [])
+  assert.match(none.warnings.join('\n'), /no session-persistence-jsonl row/)
 })
 
 test('a running turn is on disk until it ends, and survives a shutdown dispose', () => {
   const { emit } = mount()
   emit(session('s1'), 'turn/start')
-  assert.equal(onDisk().live.s1.turn, true)
-  assert.equal(onDisk().live.s1.cwd, '/work/s1')
+  assert.equal(liveOnDisk().s1.turn, true)
+  assert.equal(liveOnDisk().s1.cwd, '/work/s1')
 
   emit(session('s1'), 'turn/end', { reason: { kind: 'completed' } })
-  assert.deepEqual(onDisk().live, {})
+  assert.deepEqual(liveOnDisk(), {})
 
   emit(session('s1'), 'turn/start')
   emit(session('s1'), 'turn/end', { reason: { kind: 'aborted', reason: { kind: 'disposed' } } })
-  assert.equal(onDisk().live.s1.turn, true, 'a disposed turn is what a reboot looks like')
+  assert.equal(liveOnDisk().s1.turn, true, 'a disposed turn is what a reboot looks like')
 
   emit(session('s1'), 'turn/end', { reason: { kind: 'aborted', reason: { kind: 'user' } } })
-  assert.deepEqual(onDisk().live, {}, 'a user stop is deliberate')
+  assert.deepEqual(liveOnDisk(), {}, 'a user stop is deliberate')
 })
 
 test('an armed goal is tracked through activation changes', () => {
   const { listeners } = mount()
   listeners['goal/activation-changed']({ sessionId: 'g1', goal: { id: 'x', revision: 1, activation: 'armed' } })
-  assert.equal(onDisk().live.g1.goal, true)
+  assert.equal(liveOnDisk().g1.goal, true)
   listeners['goal/activation-changed']({ sessionId: 'g1', goal: { id: 'x', revision: 1, activation: 'disarmed' } })
-  assert.deepEqual(onDisk().live, {})
+  assert.deepEqual(liveOnDisk(), {})
 })
 
 test('subagent sessions are not tracked', () => {
   const { emit } = mount()
   emit(session('child', { origin: 'subagent' }), 'turn/start')
-  assert.deepEqual(onDisk().live, {})
+  assert.deepEqual(liveOnDisk(), {})
 })
 
 test('after a restart GET lists the in-flight set and restore resumes it', async () => {
@@ -146,7 +189,7 @@ test('after a restart GET lists the in-flight set and restore resumes it', async
     agents: { goal: goalAgent, plain: plainAgent, busy: busyAgent, held: { error: { code: 'session/writer-held' } } },
     goals: { goal: { id: 'g-1', revision: 3, phase: 'active' }, plain: { id: 'g-2', revision: 1, phase: 'paused' } },
   })
-  assert.deepEqual(onDisk().live, {})
+  assert.deepEqual(liveOnDisk(), {})
 
   const listed = await second.request('GET')
   assert.equal(listed.status, 200)
@@ -168,7 +211,7 @@ test('after a restart GET lists the in-flight set and restore resumes it', async
   assert.equal(plainAgent.sent[0].content[0].text, 'continue', 'a paused goal is left alone; the turn gets a continue')
   assert.equal(busyAgent.sent.length, 0)
   assert.deepEqual(restored.body.pending.map((p) => p.id), ['held'], 'only a retryable session stays pending')
-  assert.deepEqual(Object.keys(onDisk().pending), ['held'])
+  assert.deepEqual(Object.keys(pendingOnDisk()), ['held'])
 })
 
 test('a failing goal resume falls back to continue', async () => {
@@ -191,7 +234,7 @@ test('dismiss forgets the pending set', async () => {
   const { request } = mount()
   assert.deepEqual((await request('POST', { action: 'dismiss' })).body, { results: [], pending: [] })
   assert.deepEqual((await request('GET')).body, { pending: [] })
-  assert.deepEqual(onDisk().pending, {})
+  assert.deepEqual(pendingOnDisk(), {})
 })
 
 test('the route refuses what it should', async () => {
@@ -203,18 +246,18 @@ test('the route refuses what it should', async () => {
   assert.equal((await request('POST', '{not json')).status, 400)
   assert.equal((await request('POST', 'x'.repeat(4096))).status, 400, 'oversized body')
   assert.equal((await request('DELETE')).status, 405)
-  assert.deepEqual(Object.keys(onDisk().pending), ['s'], 'nothing above touched the pending set')
+  assert.deepEqual(Object.keys(pendingOnDisk()), ['s'], 'nothing above touched the pending set')
 
   const fenced = mount({ rejection: 403 })
   assert.equal((await fenced.request('GET')).status, 403, 'the connection fence wins')
 })
 
 test('an unreadable state file is reported and replaced', () => {
-  mkdirSync(join(HOME, 'storages'), { recursive: true })
-  writeFileSync(FILE, '{not json')
+  mkdirSync(DIR, { recursive: true })
+  writeFileSync(join(DIR, 'pending.json'), '{not json')
   const { warnings } = mount()
   assert.match(warnings[0], /ignoring unreadable/)
-  assert.deepEqual(readState(FILE), { live: {}, pending: {}, scannedThrough: 0 })
+  assert.deepEqual(readPending(DIR), { pending: {}, scannedThrough: 0 })
 })
 
 test('endsCutOff reads the last turn edge', () => {
@@ -281,7 +324,7 @@ test('changedSessionIds walks the store by mtime', () => {
   assert.deepEqual(changedSessionIds(join(HOME, 'nowhere'), 0), [], 'no store yet')
   const now = Date.now()
   storeLogs({ fresh: {}, old: { mtime: now - 3600_000 }, '~0041encoded': {} })
-  assert.deepEqual(changedSessionIds(sessionsRoot(), now - 60_000), ['fresh'],
+  assert.deepEqual(changedSessionIds(SESSIONS, now - 60_000), ['fresh'],
     'old files and encoded directory names are skipped')
 })
 

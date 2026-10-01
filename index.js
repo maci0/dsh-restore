@@ -3,12 +3,13 @@
  * harness last went down (reboot, crash, kill), the way a browser offers to
  * restore its tabs.
  *
- * While running, the host half keeps a state file listing each session with a
- * turn in progress or a goal armed. The file is rewritten on every change, so
- * whatever is on disk when the process dies is the in-flight set. At the next
- * start that set moves to `pending`. A boot scan of the stored logs adds every
- * session whose last turn no process closed (a hard crash, including one from
- * before this plugin was installed), and the browser half shows a restore bar.
+ * While running, each harness process keeps its own live record listing every
+ * session with a turn in progress or a goal armed, rewritten on every change,
+ * so whatever is on disk when the process dies is its in-flight set. At the
+ * next start, records of processes that are gone move to the shared `pending`
+ * set. A boot scan of the stored logs adds every session whose last turn no
+ * process closed (a hard crash, including one from before this plugin was
+ * installed), and the browser half shows a restore bar.
  * Restore resumes a session's goal when it is still `active` (the harness
  * disarms every goal on restart) and sends `continue` to any other session.
  *
@@ -19,7 +20,7 @@
  * `pending` after a POST is what the host could not settle (a writer lock
  * held by another process, a gateway fault), kept for the next restore.
  */
-import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm/message'
@@ -30,7 +31,7 @@ export const inject = ['webServer', 'sessionController', 'goals', 'sessions', 's
 /** The route the browser half reads and posts to. */
 export const ROUTE = '/resume-all'
 const CONTINUE_MESSAGE = 'continue'
-const STATE_VERSION = 1
+const STATE_VERSION = 2
 /** Cut-off turns older than this are history, not a crash to recover from. */
 const MAX_CRASH_AGE_MS = 3 * 24 * 60 * 60 * 1000
 /** Largest POST body accepted; the real ones are a few dozen bytes. */
@@ -41,55 +42,121 @@ function dshHome(env = process.env) {
   return resolve(env.DSH_HOME?.trim() ? env.DSH_HOME : join(homedir(), '.dsh'))
 }
 
-/** `$DSH_HOME/storages/dsh-resume-all.json`. */
-export function statePath(env = process.env) {
-  return join(dshHome(env), 'storages', 'dsh-resume-all.json')
-}
-
-/** The JSONL session store's default root, `$DSH_HOME/sessions`. */
-export function sessionsRoot(env = process.env) {
-  return join(dshHome(env), 'sessions')
+/**
+ * `$DSH_HOME/storages/dsh-resume-all/`: `pending.json`, shared by every
+ * harness process on this home, and one `live-<pid>.json` per process, which
+ * only that process writes, so two processes never overwrite each other.
+ */
+export function stateDir(env = process.env) {
+  return join(dshHome(env), 'storages', 'dsh-resume-all')
 }
 
 /**
- * Read the state file. A missing file is an empty state; a malformed one is
- * reported and replaced, since it only ever holds this plugin's own record.
- * @returns {{ live: Record<string, Entry>, pending: Record<string, Entry>, scannedThrough: number }}
- *   `scannedThrough` is the newest log time already offered, so a dismissed
- *   crash is not offered again.
+ * Read one state file. Missing is `undefined`; a malformed file is reported
+ * and treated as missing, since it only ever holds this plugin's own record.
  */
-export function readState(path, warn = () => {}) {
+function readRecord(path, warn) {
   let raw
   try {
     raw = readFileSync(path, 'utf8')
   } catch (error) {
-    if (error.code === 'ENOENT') return { live: {}, pending: {}, scannedThrough: 0 }
+    if (error.code === 'ENOENT') return undefined
     throw error
   }
   try {
     const parsed = JSON.parse(raw)
     if (parsed?.version !== STATE_VERSION) throw new Error(`unsupported version ${parsed?.version}`)
-    return { live: parsed.live ?? {}, pending: parsed.pending ?? {}, scannedThrough: parsed.scannedThrough ?? 0 }
+    return parsed
   } catch (error) {
     warn(`dsh-resume-all: ignoring unreadable ${path}: ${error.message}`)
-    return { live: {}, pending: {}, scannedThrough: 0 }
+    return undefined
   }
 }
 
 /** Atomic write: a crash mid-write leaves the previous file, never a torn one. */
-export function writeState(path, state) {
+function writeRecord(path, value) {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify({ version: STATE_VERSION, ...state }, null, 2))
+  writeFileSync(tmp, JSON.stringify({ version: STATE_VERSION, ...value }, null, 2))
   renameSync(tmp, path)
 }
 
 /**
- * Boot step: everything live in the previous process becomes pending. Earlier
- * pending entries the user never acted on stay; a newer live entry wins.
+ * The shared pending set. `scannedThrough` is the newest log time already
+ * offered, so a dismissed crash is not offered again.
+ * @returns {{ pending: Record<string, Entry>, scannedThrough: number }}
  */
-export function promoteLive(state) {
-  return { ...state, live: {}, pending: { ...state.pending, ...state.live } }
+export function readPending(dir, warn = () => {}) {
+  const record = readRecord(join(dir, 'pending.json'), warn)
+  return { pending: record?.pending ?? {}, scannedThrough: record?.scannedThrough ?? 0 }
+}
+
+/** This machine boot, so a record written before a reboot is known dead; undefined off Linux. */
+function currentBootId() {
+  try {
+    return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether a process exists (EPERM means it does, owned by someone else). */
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === 'EPERM'
+  }
+}
+
+/**
+ * Whether the process that wrote a live record is still running: never when it
+ * carries this process's own pid or another boot's id, else when its pid
+ * exists. A pid reused within the same boot reads as alive, so that record is
+ * offered once its new holder exits.
+ * @param {{ pid: number, bootId?: string }} owner - the record's writer.
+ * @param here - this process's identity and liveness probe.
+ */
+export function ownerAlive(owner, here = { pid: process.pid, bootId: currentBootId(), alive: pidAlive }) {
+  if (owner.pid === here.pid) return false
+  if (owner.bootId !== undefined && here.bootId !== undefined && owner.bootId !== here.bootId) return false
+  return here.alive(owner.pid)
+}
+
+/**
+ * Boot step: fold every live record whose process is gone into the shared
+ * pending set (a newer live entry wins) and delete that record. Records of
+ * processes still running are left to them.
+ */
+export function adoptDeadRecords(dir, warn = () => {}, here = undefined) {
+  const state = readPending(dir, warn)
+  let files = []
+  try {
+    files = readdirSync(dir)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+  for (const file of files) {
+    if (!/^live-\d+\.json$/u.test(file)) continue
+    const record = readRecord(join(dir, file), warn)
+    if (record !== undefined && ownerAlive(record, here)) continue
+    state.pending = { ...state.pending, ...(record?.live ?? {}) }
+    rmSync(join(dir, file), { force: true })
+  }
+  writeRecord(join(dir, 'pending.json'), state)
+  return state
+}
+
+/**
+ * The JSONL store root, read from its loader row so a moved store is scanned
+ * where it lives. Undefined when the profile persists sessions another way.
+ */
+function jsonlRoot(ctx) {
+  const loader = ctx.get('loader')
+  const row = loader === undefined ? undefined : [...loader.entries()].find(entry => entry.options?.id === 'session-persistence-jsonl')
+  const root = row?.fiber?.config?.root
+  return typeof root === 'string' ? root : undefined
 }
 
 /**
@@ -227,20 +294,34 @@ async function readJson(req) {
 }
 
 export function apply(ctx) {
-  const path = statePath()
+  const dir = stateDir()
   const warn = (text) => ctx.logger.warn(text)
-  // ponytail: one file per DSH_HOME, last writer wins. Two harness processes on
-  // the same home overwrite each other's live set; key the file by profile if
-  // that ever matters.
-  const state = promoteLive(readState(path, warn))
-  writeState(path, state)
+  adoptDeadRecords(dir, warn)
 
-  const save = () => {
+  // This process's own record: only it writes the file, so another harness on
+  // the same home cannot overwrite it.
+  const livePath = join(dir, `live-${process.pid}.json`)
+  const live = {}
+  const bootId = currentBootId()
+  const saveLive = () => {
     try {
-      writeState(path, state)
+      writeRecord(livePath, { pid: process.pid, ...(bootId === undefined ? {} : { bootId }), live })
     } catch (error) {
-      warn(`dsh-resume-all: cannot write ${path}: ${error.message}`)
+      warn(`dsh-resume-all: cannot write ${livePath}: ${error.message}`)
     }
+  }
+  saveLive()
+
+  /** Read the shared pending set fresh, apply `change`, write it back. */
+  const updatePending = (change) => {
+    const state = readPending(dir, warn)
+    change(state)
+    try {
+      writeRecord(join(dir, 'pending.json'), state)
+    } catch (error) {
+      warn(`dsh-resume-all: cannot write ${join(dir, 'pending.json')}: ${error.message}`)
+    }
+    return state
   }
 
   /**
@@ -251,10 +332,13 @@ export function apply(ctx) {
   const scanLogs = async () => {
     const found = []
     let unreadable = 0
-    // ponytail: the stat walk assumes the default JSONL root (`$DSH_HOME/sessions`).
-    // A profile that moves `session-persistence-jsonl.root` gets no scan, only
-    // the live record; read the root from the row if that ever matters.
-    for (const id of changedSessionIds(sessionsRoot(), crashFloor(state.scannedThrough))) {
+    const root = jsonlRoot(ctx)
+    if (root === undefined) {
+      warn('dsh-resume-all: no session-persistence-jsonl row, so no boot scan; only the live record is offered')
+      return
+    }
+    const { scannedThrough } = readPending(dir, warn)
+    for (const id of changedSessionIds(root, crashFloor(scannedThrough))) {
       try {
         const handle = await ctx.sessionPersistence.open(id, 'read')
         try {
@@ -269,46 +353,48 @@ export function apply(ctx) {
       }
     }
     if (unreadable > 0) warn(`dsh-resume-all: skipped ${unreadable} session log(s) that could not be read`)
-    const { entries, through } = crashedEntries(found, state.scannedThrough)
-    state.pending = { ...entries, ...state.pending }
-    state.scannedThrough = through
-    save()
+    const { entries, through } = crashedEntries(found, scannedThrough)
+    updatePending((state) => {
+      state.pending = { ...entries, ...state.pending }
+      state.scannedThrough = Math.max(state.scannedThrough, through)
+    })
   }
   const scanned = scanLogs().catch((error) => warn(`dsh-resume-all: log scan failed: ${error.message}`))
 
   /** Set one flag on a session's live entry; drop the entry once nothing is in flight. */
   const mark = (session, flag, on) => {
     if (session.header?.origin === 'subagent') return // the parent resumes its children
-    const entry = state.live[session.id]
+    const entry = live[session.id]
     if (!on) {
       if (!entry?.[flag]) return
       entry[flag] = false
-      if (!entry.turn && !entry.goal) delete state.live[session.id]
+      if (!entry.turn && !entry.goal) delete live[session.id]
     } else {
       if (entry?.[flag]) return
-      state.live[session.id] = { ...(entry ?? { cwd: session.header?.cwd, since: Date.now() }), [flag]: true }
+      live[session.id] = { ...(entry ?? { cwd: session.header?.cwd, since: Date.now() }), [flag]: true }
     }
-    save()
+    saveLive()
   }
 
   const restore = async () => {
     const results = []
-    for (const id of Object.keys(state.pending)) {
+    const settled = []
+    for (const id of Object.keys(readPending(dir, warn).pending)) {
       let result
       try {
         result = await resumeOne(ctx, id)
       } catch (error) {
         result = { settled: false, outcome: `failed: ${error.message}` }
       }
-      if (result.settled) delete state.pending[id]
+      if (result.settled) settled.push(id)
       results.push({ id, outcome: result.outcome })
     }
-    save()
+    updatePending((state) => { for (const id of settled) delete state.pending[id] })
     return results
   }
 
   let restoring
-  const pendingList = () => Object.entries(state.pending).map(([id, entry]) => ({ id, ...entry }))
+  const pendingList = () => Object.entries(readPending(dir, warn).pending).map(([id, entry]) => ({ id, ...entry }))
 
   const handler = async (req, res) => {
     const rejection = ctx.get('connection')?.requestRejection(req)
@@ -337,8 +423,7 @@ export function apply(ctx) {
     }
     const body = await readJson(req)
     if (body?.action === 'dismiss') {
-      state.pending = {}
-      save()
+      updatePending((state) => { state.pending = {} })
       sendJson(res, 200, { results: [], pending: [] })
       return
     }
