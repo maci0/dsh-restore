@@ -3,4 +3,4 @@
 # the profile's cordis.patch.yml: insert does not dedupe ids.
 - insert:
     - id: restore
-      name: 'dsh-restore'
+      name: '@maci0/dsh-restore'
