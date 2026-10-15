@@ -22,7 +22,7 @@ waits; nothing tells you which of dozens of sessions were working.
 > row added with `--patch` is an overlay: it disappears at the next start.
 
 ```sh
-dsh plugin --profile web add github:maci0/dsh-restore#v0.8.3
+dsh plugin --profile web add github:maci0/dsh-restore#v0.8.4
 ```
 
 Pin a release tag: a bare `github:` spec floats on `main`. To upgrade, run the
