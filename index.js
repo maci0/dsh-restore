@@ -180,7 +180,7 @@ export function adoptDeadRecords(dir, warn = () => {}, here = undefined) {
     for (const file of readdirSync(dir)) {
       if (!/^live-\d+\.json$/u.test(file)) continue
       const record = readRecord(join(dir, file), warn)
-      if (record !== undefined && ownerAlive(record, here)) continue
+      if (record === undefined || ownerAlive(record, here)) continue
       for (const [id, entry] of Object.entries(record?.live ?? {})) {
         if ((entry.since ?? 0) >= (state.pending[id]?.since ?? 0)) state.pending[id] = entry
       }

@@ -149,6 +149,18 @@ test('adoption preserves live records when publication fails, and newer pending 
   assert.equal(existsSync(path), false, 'only the successful publication retires the live record')
 })
 
+test('adoption preserves unreadable live records for recovery instead of deleting them', () => {
+  mkdirSync(DIR, { recursive: true })
+  const path = join(DIR, 'live-9999.json')
+  for (const content of ['{truncated', JSON.stringify({ version: 3, live: { s: { goal: true } } })]) {
+    writeFileSync(path, content)
+    const warnings = []
+    adoptDeadRecords(DIR, (message) => warnings.push(message))
+    assert.equal(readFileSync(path, 'utf8'), content)
+    assert.match(warnings[0], /ignoring unreadable/)
+  }
+})
+
 test('parallel processes retain every pending edit and a killed writer releases its lock', async () => {
   const moduleUrl = new URL('../index.js', import.meta.url).href
   const launch = (code) => spawn(process.execPath, ['--eval', code], { env: { ...process.env, RESTORE_TEST_DIR: DIR }, stdio: ['ignore', 'pipe', 'pipe'] })
