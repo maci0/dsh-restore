@@ -17,12 +17,14 @@ waits; nothing tells you which of dozens of sessions were working.
 
 ## Install
 
+Requires DeepSeek Harness `>=0.2.1-rc.2 <0.3.0`. Restart DSH and refresh the browser after upgrading.
+
 > **Install it as a bundle.** `dsh plugin add …` mounts the row from the
 > package's own patch layer, which is what the settings editor can write to. A
 > row added with `--patch` is an overlay: it disappears at the next start.
 
 ```sh
-dsh plugin --profile web add --save-exact @maci0/dsh-restore@0.9.0
+dsh plugin --profile web add --save-exact @maci0/dsh-restore@0.10.0
 ```
 
 Pin an exact npm version. To upgrade, run the same command with the newer

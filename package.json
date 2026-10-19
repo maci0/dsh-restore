@@ -1,6 +1,6 @@
 {
   "name": "@maci0/dsh-restore",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -30,9 +30,6 @@
         "@deepseek-ai/dsh-client-ui-workspace",
         "@deepseek-ai/dsh-api-session-controller"
       ]
-    },
-    "compatibility": {
-      "dsh": ">=0.2.0-rc.2 <0.3.0"
     }
   },
   "files": [
@@ -50,7 +47,8 @@
     "test:node": "node --test tests/*.test.*"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "repository": {
     "type": "git",
@@ -58,9 +56,9 @@
   },
   "icon": "./icon.svg",
   "dependencies": {
-    "@deepseek-ai/dsh-llm": "0.2.1-alpha.3"
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5-alpha.2"
+    "@deepseek-ai/cordis": "4.0.5"
   }
 }
