@@ -50,8 +50,11 @@ function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {}, sess
     get: (name) => {
       if (name === 'connection') return { requestRejection: () => rejection }
       // The loader row the boot scan reads its store root from; `null` drops it.
+      // As on a real Fiber, `config` is the raw row (an unevaluated `!!js` expression in
+      // the shipped bundle) and `effectiveConfig` is what the plugin was activated with.
       if (name === 'loader' && sessionsRoot !== null) {
-        return { entries: () => [{ options: { id: 'session-persistence-jsonl' }, fiber: { config: { root: sessionsRoot } } }] }
+        const fiber = { config: { root: { __jsExpr: "dshHomePath('sessions')" } }, effectiveConfig: { root: sessionsRoot } }
+        return { entries: () => [{ options: { id: 'session-persistence-jsonl' }, fiber }] }
       }
       return undefined
     },

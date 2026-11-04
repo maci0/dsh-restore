@@ -196,11 +196,13 @@ export function adoptDeadRecords(dir, warn = () => {}, here = undefined) {
 /**
  * The JSONL store root, read from its loader row so a moved store is scanned
  * where it lives. Undefined when the profile persists sessions another way.
+ * `effectiveConfig` is the evaluated row; `config` is raw input, where the
+ * shipped root is an unevaluated `!!js` expression.
  */
 function jsonlRoot(ctx) {
   const loader = ctx.get('loader')
   const row = loader === undefined ? undefined : [...loader.entries()].find(entry => entry.options?.id === 'session-persistence-jsonl')
-  const root = row?.fiber?.config?.root
+  const root = row?.fiber?.effectiveConfig?.root
   return typeof root === 'string' ? root : undefined
 }
 
