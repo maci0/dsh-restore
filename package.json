@@ -1,6 +1,6 @@
 {
   "name": "@maci0/dsh-restore",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

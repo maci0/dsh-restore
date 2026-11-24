@@ -436,7 +436,7 @@ export function apply(ctx) {
   const pendingList = () => Object.entries(readPending(dir, warn).pending).map(([id, entry]) => ({ id, ...entry }))
 
   const handler = async (req, res) => {
-    const rejection = ctx.get('connection')?.requestRejection(req)
+    const rejection = ctx.get('connection')?.requestRejection?.(req)
     if (rejection !== undefined) {
       res.statusCode = rejection
       res.end()

@@ -38,7 +38,7 @@ function storeLogs(logs, root = SESSIONS) {
  * Mount the plugin against fakes. `agents` maps session id to a fake agent or
  * to an `{ error }` resolution; `goals` maps session id to a goal view.
  */
-function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {}, sessionsRoot = SESSIONS } = {}) {
+function mount({ agents = {}, goals = {}, resumeGoal, rejection, fenceless = false, logs = {}, sessionsRoot = SESSIONS } = {}) {
   storeLogs(logs)
   const listeners = {}
   const routes = []
@@ -48,7 +48,7 @@ function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {}, sess
   const ctx = {
     logger: { warn: (text) => warnings.push(text) },
     get: (name) => {
-      if (name === 'connection') return { requestRejection: () => rejection }
+      if (name === 'connection') return fenceless ? {} : { requestRejection: () => rejection }
       // The loader row the boot scan reads its store root from; `null` drops it.
       // As on a real Fiber, `config` is the raw row (an unevaluated `!!js` expression in
       // the shipped bundle) and `effectiveConfig` is what the plugin was activated with.
@@ -106,7 +106,7 @@ function mount({ agents = {}, goals = {}, resumeGoal, rejection, logs = {}, sess
     return { status: res.statusCode, body: res.text ? JSON.parse(res.text) : undefined }
   }
   const emit = (session, type, data = {}) => listeners['session/event'](session, { type, data })
-  return { listeners, request, emit, warnings, resumedGoals, opened }
+  return { listeners, request, emit, warnings, resumedGoals, opened, routes }
 }
 
 const session = (id, header = { cwd: `/work/${id}` }) => ({ id, header })
@@ -336,6 +336,12 @@ test('the route refuses what it should', async () => {
 
   const fenced = mount({ rejection: 403 })
   assert.equal((await fenced.request('GET')).status, 403, 'the connection fence wins')
+})
+
+test('without the connection fence the route leaves admission to the web server', async () => {
+  const { request, routes } = mount({ fenceless: true })
+  assert.equal((await request('DELETE')).status, 405, 'the handler runs instead of throwing')
+  assert.equal(routes[0].auth ?? 'required', 'required', 'the route must not opt out of web server authentication')
 })
 
 test('an unreadable state file is reported and replaced', () => {

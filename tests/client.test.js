@@ -51,6 +51,7 @@ async function loadClient() {
   const slots = []
   const opened = []
   exports.apply({
+    effect: (callback) => { callback() },
     uiWorkspace: { openSession: (id) => opened.push(id) },
     slots: {
       inject: (_name, register) => register(),
@@ -154,7 +155,7 @@ test('a tab coming back into view re-reads the pending set', async () => {
   globalThis.document = {
     visibilityState: 'visible',
     head: { append() {} },
-    createElement: () => ({}),
+    createElement: () => ({ setAttribute() {} }),
     addEventListener: (type, fn) => { listeners[type] = fn },
     removeEventListener: (type) => { delete listeners[type] },
   }
@@ -175,7 +176,7 @@ test('a tab coming back into view re-reads the pending set', async () => {
 test('a load started before Dismiss cannot bring the settled sessions back', async () => {
   const listeners = {}
   globalThis.document = {
-    visibilityState: 'visible', head: { append() {} }, createElement: () => ({}),
+    visibilityState: 'visible', head: { append() {} }, createElement: () => ({ setAttribute() {} }),
     addEventListener: (name, fn) => { listeners[name] = fn }, removeEventListener: () => {},
   }
   try {

@@ -24,7 +24,7 @@ Requires DeepSeek Harness `>=0.2.2-rc.4 <0.3.0`. Restart DSH and refresh the bro
 > row added with `--patch` is an overlay: it disappears at the next start.
 
 ```sh
-dsh plugin --profile web add --save-exact @maci0/dsh-restore@0.10.3
+dsh plugin --profile web add --save-exact @maci0/dsh-restore@0.10.4
 ```
 
 Pin an exact npm version. To upgrade, run the same command with the newer
